@@ -1,0 +1,27 @@
+FROM registry.access.redhat.com/ubi8-minimal
+ARG PKG=microdnf
+
+# set prompt format
+ENV PS1="(httpd)[\u@\h \W]\\$ "
+
+# upgrade packages
+RUN ${PKG} upgrade -y \
+    && rm -rf /var/cache/dnf/* \
+    && ${PKG} clean all
+
+# install httpd
+RUN ${PKG} install -y httpd \
+    && rm -rf /var/cache/dnf/* \
+    && ${PKG} clean all
+
+# set entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN ln -s /usr/local/bin/docker-entrypoint.sh /
+
+# https://httpd.apache.org/docs/2.4/stopping.html#gracefulstop
+STOPSIGNAL SIGWINCH
+EXPOSE 80
+
+# USER apache
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["httpd", "-DFOREGROUND"]

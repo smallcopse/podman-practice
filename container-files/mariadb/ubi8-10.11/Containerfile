@@ -1,0 +1,45 @@
+# FROM registry.access.redhat.com/ubi8/ubi
+FROM registry.access.redhat.com/ubi8-minimal
+ARG PKG=microdnf
+ARG MARIADB_VERSION=10.11
+
+RUN ${PKG} upgrade -y \
+    && rm -rf /var/cache/dnf/* \
+    && ${PKG} clean all
+
+COPY MariaDB.repo /etc/yum.repos.d/
+RUN rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm \
+    && ${PKG} install MariaDB-server \
+    && rm -rf /var/cache/dnf/* \
+    && ${PKG} clean all
+
+# ENV PATH $PATH:/usr/pgsql-$PG_MAJOR/bin
+ENV PS1="(mariadb-server)[\u@\h \W]\\$ "
+
+# Optionally initialize the database and enable automatic start:
+# RUN /usr/pgsql-16/bin/postgresql-${PG_MAJOR}-setup initdb
+
+# https://www.haproxy.org/download/1.8/doc/management.txt
+# "4. Stopping and restarting HAProxy"
+# "when the SIGTERM signal is sent to the haproxy process, it immediately quits and all established connections are closed"
+# "graceful stop is triggered when the SIGUSR1 signal is sent to the haproxy process"
+# STOPSIGNAL SIGUSR1
+ENV LANG C.UTF-8
+
+# RUN mkdir -p /var/run/postgresql && chown -R postgres:postgres /var/run/postgresql && chmod 2777 /var/run/postgresql
+# RUN mkdir /docker-entrypoint-initdb.d
+# ENV PGDATA /var/lib/pgsql/${PG_MAJOR}/data
+# this 777 will be replaced by 700 at runtime (allows semi-arbitrary "--user" values)
+# RUN mkdir -p "$PGDATA" && chown -R postgres:postgres "$PGDATA" && chmod 777 "$PGDATA"
+# VOLUME /var/lib/postgresql/data
+
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN ln -s /usr/local/bin/docker-entrypoint.sh /
+USER mysql
+# WORKDIR /var/lib/haproxy
+ENTRYPOINT ["docker-entrypoint.sh"]
+# CMD ["haproxy", "-f", "/etc/haproxy/haproxy.cfg"]
+# CMD ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+
+EXPOSE 3306
+CMD ["mariadbd"]

@@ -1,0 +1,63 @@
+# Save the output of this file and use kubectl create -f to import
+# it into Kubernetes.
+#
+# Created with podman-4.4.1
+apiVersion: v1
+kind: Pod
+metadata:
+  # annotations:
+  #   org.opencontainers.image.base.digest/httpd: sha256:e641b1b037ed074bf0764831a4e070a2937f6a28699c630ed5dacb2a
+  #   org.opencontainers.image.base.name/httpd: registry.access.redhat.com/ubi8-minimal:latest
+  creationTimestamp: "2023-11-26T17:19:08Z"
+  labels:
+    app: php-pod
+  name: php-pod
+spec:
+  containers:
+    - image: registry.local/vagrant/httpd:2.4-20240104
+      # image: registry.local/root/php-fpm:8.2-20240107
+      name: httpd
+      ports:
+        - containerPort: 80
+          hostPort: 28080
+      args:
+        - httpd
+        - -DFOREGROUND
+      volumeMounts:
+        - mountPath: /etc/httpd/conf.d/90-php.conf
+          name: php-conf
+          readOnly: true
+      resources: {}
+      securityContext: {}
+    - image: registry.local/vagrant/php-fpm:8.2-20240107
+      # image: registry.local/root/php-fpm:8.2-20240107
+      name: php-fpm
+      # ports:
+      #   - containerPort: 80
+      #     hostPort: 18080
+      args:
+        - php-fpm
+      volumeMounts:
+        - mountPath: /var/www/html/info.php
+          name: info-php
+          readOnly: true
+      resources: {}
+      securityContext: {}
+  hostname: php-pod
+  restartPolicy: Never
+  volumes:
+    - name: php-conf
+      hostPath:
+        # directory location on host
+        # path: /home/vagrant/container-files/php-fpm/90-php.conf
+        path: /tmp/90-php.conf
+        type: File
+    - name: info-php
+      hostPath:
+        # directory location on host
+        # path: /home/vagrant/container-files/php-fpm/info.php
+        path: /tmp/info.php
+        type: File
+        # this field is optional
+        # type: Directory
+status: {}

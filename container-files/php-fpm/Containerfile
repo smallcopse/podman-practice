@@ -1,0 +1,137 @@
+FROM registry.access.redhat.com/ubi8-minimal
+ARG PKG=microdnf
+
+ARG WP_VERSION
+ARG PHP_VERSION
+ARG HTML_ROOT=/var/www/html
+
+# set prompt format
+ENV PS1="(php-fpm)[\u@\h \W]\\$ "
+
+RUN ${PKG} upgrade -y \
+    && rm -rf /var/cache/dnf/* \
+    && ${PKG} clean all
+
+# https://docs.fedoraproject.org/en-US/epel/
+# install epel, remi and enable dnf module php:remi-8.2
+RUN rpm -Uvh https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm \
+    && rpm -Uvh https://rpms.remirepo.net/enterprise/remi-release-8.rpm \
+    && ${PKG} module enable php:remi-${PHP_VERSION} \
+    && rm -rf /var/cache/dnf/* \
+    && ${PKG} clean all
+# install php-fpm
+RUN ${PKG} install -y php-fpm php-devel php-mbstring php-mysqlnd php-pdo php-gd php-opcache tar findutils \
+    && rm -rf /var/cache/dnf/* \
+    && ${PKG} clean all
+
+ENV PHP_INI_DIR /etc/php.d
+RUN set -eux; \
+	mkdir -p "$PHP_INI_DIR/conf.d"; \
+# allow running as an arbitrary user (https://github.com/docker-library/php/issues/743)
+	if [ ! -d /var/www/html ]; then \
+	    mkdir -p /var/www/html; \
+	    chown apache:apache /var/www/html; \
+	    chmod 1777 /var/www/html; \
+    fi
+
+# Apply stack smash protection to functions using local buffers and alloca()
+# Make PHP's main executable position-independent (improves ASLR security mechanism, and has no performance impact on x86_64)
+# Enable optimization (-O2)
+# Enable linker optimization (this sorts the hash buckets to improve cache locality, and is non-default)
+# https://github.com/docker-library/php/issues/272
+# -D_LARGEFILE_SOURCE and -D_FILE_OFFSET_BITS=64 (https://www.php.net/manual/en/intro.filesystem.php)
+ENV PHP_CFLAGS="-fstack-protector-strong -fpic -fpie -O2 -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64"
+ENV PHP_CPPFLAGS="$PHP_CFLAGS"
+ENV PHP_LDFLAGS="-Wl,-O1 -pie"
+
+ENV GPG_KEYS 39B641343D8C104B2B146DC3F9C39DC0B9698544 E60913E4DF209907D8E30D96659A97C9CF2A795A 1198C0117593497A5EC5C199286AF1F9897469DC
+
+ENV PHP_VERSION 8.2.14
+
+# set recommended PHP.ini settings
+# see https://secure.php.net/manual/en/opcache.installation.php
+# RUN set -eux; \
+# 	docker-php-ext-enable opcache; \
+# 	{ \
+# 		echo 'opcache.memory_consumption=128'; \
+# 		echo 'opcache.interned_strings_buffer=8'; \
+# 		echo 'opcache.max_accelerated_files=4000'; \
+# 		echo 'opcache.revalidate_freq=2'; \
+# 	} > /usr/local/etc/php/conf.d/opcache-recommended.ini
+# https://wordpress.org/support/article/editing-wp-config-php/#configure-error-logging
+# RUN { \
+# # https://www.php.net/manual/en/errorfunc.constants.php
+# # https://github.com/docker-library/wordpress/issues/420#issuecomment-517839670
+# 		echo 'error_reporting = E_ERROR | E_WARNING | E_PARSE | E_CORE_ERROR | E_CORE_WARNING | E_COMPILE_ERROR | E_COMPILE_WARNING | E_RECOVERABLE_ERROR'; \
+# 		echo 'display_errors = Off'; \
+# 		echo 'display_startup_errors = Off'; \
+# 		echo 'log_errors = On'; \
+# 		echo 'error_log = /dev/stderr'; \
+# 		echo 'log_errors_max_len = 1024'; \
+# 		echo 'ignore_repeated_errors = On'; \
+# 		echo 'ignore_repeated_source = Off'; \
+# 		echo 'html_errors = Off'; \
+# 	} > /usr/local/etc/php/conf.d/error-logging.ini
+
+
+# COPY docker-entrypoint.sh /usr/local/bin/
+# RUN ln -s /usr/local/bin/docker-entrypoint.sh /
+# COPY 90-php.conf /etc/httpd/conf.d/
+
+COPY docker-php-ext-* docker-php-entrypoint /usr/local/bin/
+
+# USER apache
+ENTRYPOINT ["docker-php-entrypoint"]
+WORKDIR /var/www/html
+
+RUN set -eux; \
+	cd /etc; \
+	if [ -d php-fpm.d ]; then \
+		# for some reason, upstream's php-fpm.conf.default has "include=NONE/etc/php-fpm.d/*.conf"
+		# sed 's!=NONE/!=!g' php-fpm.conf.default | tee php-fpm.conf > /dev/null; \
+		# cp php-fpm.d/www.conf.default php-fpm.d/www.conf; \
+        cat php-fpm.d/www.conf; \
+	else \
+		# PHP 5.x doesn't use "include=" by default, so we'll create our own simple config that mimics PHP 7+ for consistency
+		mkdir php-fpm.d; \
+		cp php-fpm.conf.default php-fpm.d/www.conf; \
+		{ \
+			echo '[global]'; \
+			echo 'include=etc/php-fpm.d/*.conf'; \
+		} | tee php-fpm.conf; \
+	fi; \
+	{ \
+		echo '[global]'; \
+		echo 'error_log = /proc/self/fd/2'; \
+		echo; echo '; https://github.com/docker-library/php/pull/725#issuecomment-443540114'; echo 'log_limit = 8192'; \
+		echo; \
+		echo '[www]'; \
+		echo '; php-fpm closes STDOUT on startup, so sending logs to /proc/self/fd/1 does not work.'; \
+		echo '; https://bugs.php.net/bug.php?id=73886'; \
+		echo 'access.log = /proc/self/fd/2'; \
+		echo; \
+		echo 'clear_env = no'; \
+		echo; \
+		echo '; Ensure worker stdout and stderr are sent to the main error log.'; \
+		echo 'catch_workers_output = yes'; \
+		echo 'decorate_workers_output = no'; \
+	} | tee php-fpm.d/docker.conf; \
+	{ \
+		echo '[global]'; \
+		echo 'daemonize = no'; \
+		echo; \
+		echo '[www]'; \
+		echo 'listen = 9000'; \
+	} | tee php-fpm.d/zz-docker.conf; \
+	mkdir -p "$PHP_INI_DIR/conf.d"; \
+	{ \
+		echo '; https://github.com/docker-library/php/issues/878#issuecomment-938595965'; \
+		echo 'fastcgi.logging = Off'; \
+	} > "$PHP_INI_DIR/conf.d/docker-fpm.ini"
+
+# Override stop signal to stop process gracefully
+# https://github.com/php/php-src/blob/17baa87faddc2550def3ae7314236826bc1b1398/sapi/fpm/php-fpm.8.in#L163
+STOPSIGNAL SIGQUIT
+
+EXPOSE 9000
+CMD ["php-fpm"]

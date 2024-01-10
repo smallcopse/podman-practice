@@ -1,0 +1,29 @@
+FROM registry.access.redhat.com/ubi8-minimal
+ARG PKG=microdnf
+
+# set prompt format
+ENV PS1="(haproxy)[\u@\h \W]\\$ "
+
+# upgrade packages
+RUN ${PKG} upgrade -y \
+    && rm -rf /var/cache/dnf/* \
+    && ${PKG} clean all
+
+# install haproxy
+RUN ${PKG} install -y haproxy
+
+# set entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN ln -s usr/local/bin/docker-entrypoint.sh /
+
+# USER haproxy
+# WORKDIR /var/lib/haproxy
+
+# https://www.haproxy.org/download/1.8/doc/management.txt
+# "4. Stopping and restarting HAProxy"
+# "when the SIGTERM signal is sent to the haproxy process, it immediately quits and all established connections are closed"
+# "graceful stop is triggered when the SIGUSR1 signal is sent to the haproxy process"
+STOPSIGNAL SIGUSR1
+
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["haproxy", "-f", "/etc/haproxy/haproxy.cfg"]

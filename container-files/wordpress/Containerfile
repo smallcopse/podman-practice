@@ -1,0 +1,83 @@
+FROM php-fpm:8.2-20240107
+ARG PKG=microdnf
+
+ARG WP_VERSION
+ARG PHP_VERSION
+ARG HTML_ROOT=/var/www/html
+
+# set prompt format
+ENV PS1="(wordpress)[\u@\h \W]\\$ "
+
+# set recommended PHP.ini settings
+# see https://secure.php.net/manual/en/opcache.installation.php
+# RUN set -eux; \
+# 	docker-php-ext-enable opcache; \
+# 	{ \
+# 		echo 'opcache.memory_consumption=128'; \
+# 		echo 'opcache.interned_strings_buffer=8'; \
+# 		echo 'opcache.max_accelerated_files=4000'; \
+# 		echo 'opcache.revalidate_freq=2'; \
+# 	} > /usr/local/etc/php/conf.d/opcache-recommended.ini
+# https://wordpress.org/support/article/editing-wp-config-php/#configure-error-logging
+# RUN { \
+# # https://www.php.net/manual/en/errorfunc.constants.php
+# # https://github.com/docker-library/wordpress/issues/420#issuecomment-517839670
+# 		echo 'error_reporting = E_ERROR | E_WARNING | E_PARSE | E_CORE_ERROR | E_CORE_WARNING | E_COMPILE_ERROR | E_COMPILE_WARNING | E_RECOVERABLE_ERROR'; \
+# 		echo 'display_errors = Off'; \
+# 		echo 'display_startup_errors = Off'; \
+# 		echo 'log_errors = On'; \
+# 		echo 'error_log = /dev/stderr'; \
+# 		echo 'log_errors_max_len = 1024'; \
+# 		echo 'ignore_repeated_errors = On'; \
+# 		echo 'ignore_repeated_source = Off'; \
+# 		echo 'html_errors = Off'; \
+# 	} > /usr/local/etc/php/conf.d/error-logging.ini
+
+# install wordpress
+RUN cd ${HTML_ROOT} \
+    && curl -O https://ja.wordpress.org/wordpress-${WP_VERSION}-ja.tar.gz \
+    && tar zxf wordpress-${WP_VERSION}-ja.tar.gz \
+	&& rm wordpress-${WP_VERSION}-ja.tar.gz \
+# https://wordpress.org/support/article/htaccess/
+	&& [ ! -e ${HTML_ROOT}/wordpress/.htaccess ]; \
+	{ \
+		echo '# BEGIN WordPress'; \
+		echo ''; \
+		echo 'RewriteEngine On'; \
+		echo 'RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]'; \
+		echo 'RewriteBase /'; \
+		echo 'RewriteRule ^index\.php$ - [L]'; \
+		echo 'RewriteCond %{REQUEST_FILENAME} !-f'; \
+		echo 'RewriteCond %{REQUEST_FILENAME} !-d'; \
+		echo 'RewriteRule . /index.php [L]'; \
+		echo ''; \
+		echo '# END WordPress'; \
+	} > ${HTML_ROOT}/wordpress/.htaccess; \
+    chown -R apache:apache ./*; \
+# pre-create wp-content (and single-level children) for folks who want to bind-mount themes, etc so permissions are pre-created properly instead of root:root
+# wp-content/cache: https://github.com/docker-library/wordpress/issues/534#issuecomment-705733507
+	mkdir wp-content; \
+	for dir in ${HTML_ROOT}/wordpress/wp-content/*/ cache; do \
+		dir="$(basename "${dir%/}")"; \
+		mkdir "wp-content/$dir"; \
+	done; \
+    chown -R apache:apache wp-content; \
+	chmod -R 1777 wp-content
+
+# install wp-cli
+# cf: https://wp-cli.org/ja/#%E3%82%A4%E3%83%B3%E3%82%B9%E3%83%88%E3%83%BC%E3%83%AB%E6%96%B9%E6%B3%95
+RUN curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
+  && chmod +x wp-cli.phar \
+  && mv wp-cli.phar /usr/local/bin/wp \
+  && wp --info
+
+# set entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN ln -s /usr/local/bin/docker-entrypoint.sh /
+
+COPY --chown=apache:apache wp-config-docker.php ${HTML_ROOT}/wordpress/
+
+# USER apache
+ENTRYPOINT ["docker-entrypoint.sh"]
+WORKDIR /var/www/html
+CMD ["php-fpm"]
