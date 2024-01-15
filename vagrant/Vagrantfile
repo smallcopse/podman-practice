@@ -4,7 +4,7 @@
 require 'yaml'
 VAGRANTFILE_API_VERSION = '2'
 VAGRANTFILE_DIR = File.dirname(__FILE__)
-ANSIBLE_INVENTORY_PATH = 'provisioning/inventories/local/hosts.yml'
+ANSIBLE_INVENTORY_PATH = 'provisioning/inventories/rocky8/hosts.yml'
 VIRTUALBOX_INTNET = 'kollanet'
 PRIVATE_KEY_PATH = '~/.vagrant.d/insecure_private_key'
 VM_BOX = 'almalinux/8'
