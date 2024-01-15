@@ -2,19 +2,15 @@
 # vi: set ft=ruby :
 
 require 'yaml'
+require './utils/network.rb'
+require './utils/plugin.rb'
+
 VAGRANTFILE_API_VERSION = '2'
 VAGRANTFILE_DIR = File.dirname(__FILE__)
 ANSIBLE_INVENTORY_PATH = 'provisioning/inventories/rocky8/hosts.yml'
 VIRTUALBOX_INTNET = 'kollanet'
 PRIVATE_KEY_PATH = '~/.vagrant.d/insecure_private_key'
-VM_BOX = 'almalinux/8'
-VM_BOX_VERSION = "8.8.20230606"
-# VM_BOX = "centos/stream8"
-# VM_BOX_VERSION = "20230710.0"
-# VM_BOX = 'generic/centos8s'
-# VM_BOX_VERSION = "4.2.16"
-DEFAULT_DISK_SIZE = "50GB"
-# https://app.vagrantup.com/centos/boxes/stream8/versions/20230710.0/providers/virtualbox.box
+
 # ------------------------
 # install required plugins
 # ------------------------
@@ -44,146 +40,39 @@ rescue Errno::ENOENT => ex
 end
 
 # ---------------------------
-# create /etc/hosts content
-# ---------------------------
-etc_hosts_content = ''
-conf['all']['hosts'].each do |host, hostvars|
-  etc_hosts_content += hostvars['ip'] + ' ' + hostvars['hostname'] + '\n'
-end
-etc_hosts_command = 'cat << "EOF" | sudo tee -a /etc/hosts\n' + etc_hosts_content + "EOF"
-
-
-def add_network_interface(node, net_if, if_idx)
-    # print if_idx
-    # print net_if['type']
-    case net_if['type']
-    when 'internal' then
-      # node.vm.network :private_network do |net|
-      #   # if net_if.fetch('ip', 'dchp') == 'dhcp' then
-      #   #   net.type = 'dhcp'
-      #   # else
-      #   #   net.ip = net_if['ip']
-      #   # end
-      #   net.ip = net_if['ip']
-      #   if net_if.fetch('dchp', false) then
-      #     net.type = 'dhcp'
-      #     net.dhcp_lower = '172.17.177.10'
-      #     net.dhcp_upper = '172.17.177.254'
-      #     net.dhcp_ip = '172.17.177.1'
-      #   end
-      #   net.auto_config = net_if.fetch('auto_config', true)
-      #   net.virtualbox__intnet = net_if['network_name']
-      # end
-      # node.vm.network 'private_network', ip: net_if['ip'], virtualbox__intnet: net_if['network_name']
-      node.vm.network 'private_network',
-        ip: net_if['ip'],
-        type: net_if.fetch('dchp', ''),
-        auto_config: net_if.fetch('auto_config', true),
-        virtualbox__intnet: net_if['network_name']
-    when 'private' then
-      params = {ip: net_if['ip'], name: net_if['network_name']}
-      if net_if.fetch('virtio', true) then
-        params[:nic_type] = "virtio"
-      end
-      node.vm.network 'private_network', **params
-    when 'dhcp' then
-      node.vm.network 'private_network',
-        # ip: net_if['ip'],
-        name: net_if['network_name'],
-        # auto_config: net_if.fetch('auto_config', true),
-        adapter: 3,
-        type: 'dhcp',
-        # type: 'dhcp',
-        dhcp_ip: net_if['dhcp_ip'],
-        dhcp_lower: net_if['dhcp_lower'],
-        dhcp_upper: net_if['dhcp_upper']
-  
-      if net_if.fetch('nat', false) then
-        node.vm.provider 'virtualbox' do |vb|
-          vb.customize ["modifyvm", :id, format('--nic%<x>d', x: idx + 1), "natnetwork"]
-          vb.customize ["modifyvm", :id, format('--nat-network%<x>d', x: idx + 1), "NatNetwork"]
-          if net_if.fetch('virtio', true) then
-            vb.customize ["modifyvm", :id, format('--nictype%<x>d', x: if_idx), "virtio"]
-          end
-        end
-      end
-  
-    # when 'bridge' then
-    #   node.vm.network 'public_network', ip: net_if['ip']
-    when 'nat' then
-      # node.vm.network "private_network", :type => 'dhcp'
-      node.vm.provider 'virtualbox' do |vb|
-        vb.customize ["modifyvm", :id, format('--nic%<x>d', x: if_idx), "natnetwork"]
-        vb.customize ["modifyvm", :id, format('--nat-network%<x>d', x: if_idx), net_if['network_name']]
-        if net_if.fetch('virtio', true) then
-          vb.customize ["modifyvm", :id, format('--nictype%<x>d', x: if_idx), "virtio"]
-        end
-      end
-    when 'unassigned' then
-      params = {auto_config: false}
-      if net_if.fetch('virtio', true) then
-        params[:nic_type] = "virtio"
-      end
-      node.vm.network 'public_network', **params
-    when 'bridge' then
-      params = {ip: net_if['ip'], type: net_if.fetch('dhcp', false)? 'dhcp' : 'static'}
-      if net_if.fetch('virtio', true) then
-        params[:nic_type] = "virtio"
-      end
-      node.vm.network 'public_network', **params
-    else
-      nil
-    end
-    # print format('|%<x>d|', x: if_idx)
-    node.vm.provider 'virtualbox' do |vb|
-      if net_if.fetch('promiscuous_mode', false) then
-        vb.customize ["modifyvm", :id, format('--nicpromisc%<x>d', x: if_idx), "allow-all"]
-      end
-      # vb.customize ["modifyvm", :id, format('--nictype%<x>d', x: if_idx), "virtio"]
-      vb.customize ["modifyvm", :id, format('--cableconnected%<x>d', x: if_idx), "on"]
-    end
-    # vb.customize ["modifyvm", :id, format('--cable-connected%<x>d', x: if_idx), "on"]
-  # end
-end
-
-
-# ---------------------------
 # Vagrant
 # ---------------------------
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
-  # disk size, Box (OS), Box version
-  config.disksize.size = DEFAULT_DISK_SIZE
-  config.vm.box = VM_BOX
-  # config.vm.box_version = VM_BOX_VERSION
   # Use the same key for each node
   config.ssh.insert_key = false
   config.hostmanager.enabled = true
+  # config.ssh.private_key_path = ["~/.vagrant.d/insecure_private_key"]
+  # config.ssh.insert_key = true
   # config.vbguest.auto_update = false
 
   conf['all']['hosts'].each do |host, hostvars|
     config.vm.define host do |node|
-      # set hostname as inventory hostname
+      # set hostname as inventory hostname     
       node.vm.hostname = hostvars['hostname']
+      
+      # set vagrant box and box version
+      node.vm.box = hostvars['box']
+      node.vm.box_version = hostvars['box_version']
+      
+      # set disk size if specified
+      if hostvars.has_key? 'disk_size' then
+        node.disksize.size = hostvars['disk_size']
+      end
 
       if hostvars.has_key?('remove_etc_hosts_localhost') and hostvars['remove_etc_hosts_localhost'] then
         node.vm.provision 'shell', privileged: true, inline: "sed -i -E 's/^127\..*"+hostvars['hostname']+".*/#&/g' /etc/hosts"
       end
-      
-      # # # if disk_size exists in the inventory, set disk size
-      # # print "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
-      # if hostvars.has_key? 'disk_size' then
-      #   print "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n"
-      #   # node.vm.disk :disk, size: hostvars['disk_size'], primary: true
-      #   config.disksize.size = hostvars['disk_size']
-      # else
-      #   print "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n"
-      #   config.disksize.size = DEFAULT_DISK_SIZE
-      # end
-      
 
-
-      # node.vm.network 'private_network', ip: hostvars['ip'], virtualbox__intnet: VIRTUALBOX_INTNET
+      # vagrant-vbguest plugin settings
+      if hostvars.has_key? 'vbguest' then
+        setup_vbguest(node, hostvars['vbguest'])
+      end
 
       # network interface settings
       hostvars.fetch('network_interfaces',[]).each_with_index do |net_if, idx|
@@ -196,6 +85,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         vb.customize ["modifyvm", :id, "--firmware", "efi"]
         vb.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
         vb.customize ["modifyvm", :id, "--nictype1",  "virtio"]
+        vb.customize ["modifyvm", :id, "--uart1", "0x3F8", "4"]
+        vb.customize ["modifyvm", :id, "--uartmode1", "file", File::NULL]
+        vb.customize ['modifyvm', :id, '--cableconnected1', 'on']
         
         # sync host time
         vb.customize ["setextradata", :id, "VBoxInternal/Devices/VMMDev/0/Config/GetHostTimeDisabled", 0]
@@ -247,6 +139,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       end
 
       # set hostname/ip to /etc/hosts
+      # add_inventory_hosts_to_etc_hosts(node, conf['all']['hosts'])
       # node.vm.provision 'shell', privileged: false, inline: etc_hosts_command
 
       # reboot VM if reboot_after_provision=true
